@@ -2,6 +2,8 @@ import express from "express";
 import multer from "multer";
 import crypto from "crypto";
 import "dotenv/config";
+import { PDFDocument } from "pdf-lib";
+
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -132,4 +134,145 @@ app.get("/oauth/callback", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
+// --- helper : récupérer access token depuis TA session en mémoire
+function getAccessToken(req) {
+  const sid = getSid(req);
+  const sess = sid ? sessions.get(sid) : null;
+  return sess?.accessToken || null;
+}
+
+function titleBase64(title) {
+  return Buffer.from(title, "utf8").toString("base64");
+}
+
+// 1) IMPORT PPTX -> Canva (job)
+app.post("/api/import", upload.single("file"), async (req, res) => {
+  try {
+    const token = getAccessToken(req);
+    if (!token) return res.status(401).json({ error: "Pas connecté à Canva" });
+    if (!req.file) return res.status(400).json({ error: "Fichier manquant" });
+
+    const title = req.body?.title || "DISCIPLINE - Lukas GUILLAUD";
+    const mimeType =
+      req.file.mimetype ||
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+    const r = await fetch("https://api.canva.com/rest/v1/imports", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/octet-stream",
+        "Import-Metadata": JSON.stringify({
+          title_base64: titleBase64(title),
+          mime_type: mimeType,
+        }),
+      },
+      body: req.file.buffer,
+    });
+
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+
+    return res.json({ jobId: data?.job?.id, status: data?.job?.status });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// 2) STATUS IMPORT (job -> designId + edit_url)
+app.get("/api/import/:jobId", async (req, res) => {
+  try {
+    const token = getAccessToken(req);
+    if (!token) return res.status(401).json({ error: "Pas connecté à Canva" });
+
+    const { jobId } = req.params;
+    const r = await fetch(`https://api.canva.com/rest/v1/imports/${jobId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// 3) EXPORT PDF (designId -> export job)
+app.post("/api/export/pdf", async (req, res) => {
+  try {
+    const token = getAccessToken(req);
+    if (!token) return res.status(401).json({ error: "Pas connecté à Canva" });
+
+    const { designId, quality = "regular" } = req.body || {};
+    if (!designId) return res.status(400).json({ error: "designId manquant" });
+
+    const r = await fetch("https://api.canva.com/rest/v1/exports", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        design_id: designId,
+        format: { type: "pdf", export_quality: quality },
+      }),
+    });
+
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+
+    return res.json({ exportId: data?.job?.id, status: data?.job?.status });
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// 4) STATUS EXPORT (export job -> urls)
+app.get("/api/export/:exportId", async (req, res) => {
+  try {
+    const token = getAccessToken(req);
+    if (!token) return res.status(401).json({ error: "Pas connecté à Canva" });
+
+    const { exportId } = req.params;
+    const r = await fetch(`https://api.canva.com/rest/v1/exports/${exportId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+
+    return res.json(data);
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// 5) FUSIONNER plusieurs PDFs (urls Canva) en 1 PDF
+app.post("/api/merge-pdf", async (req, res) => {
+  try {
+    const { urls, filename = "DISCIPLINE.pdf" } = req.body || {};
+    if (!Array.isArray(urls) || urls.length < 2) {
+      return res.status(400).json({ error: "Il faut au moins 2 urls PDF" });
+    }
+
+    const merged = await PDFDocument.create();
+
+    for (const u of urls) {
+      const bytes = await fetch(u).then(r => r.arrayBuffer());
+      const doc = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(doc, doc.getPageIndices());
+      pages.forEach(p => merged.addPage(p));
+    }
+
+    const out = await merged.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(Buffer.from(out));
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 app.listen(PORT, () => console.log("Serveur lancé sur le port", PORT));
