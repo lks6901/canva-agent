@@ -17,6 +17,8 @@ if (!CANVA_CLIENT_ID || !CANVA_CLIENT_SECRET || !APP_BASE_URL) {
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use(express.static("."));
+
 
 // --- sessions en mémoire (MVP)
 const sessions = new Map(); // sid -> { codeVerifier, accessToken, refreshToken, expiresAt }
