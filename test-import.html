@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Test Canva Import</title>
+</head>
+<body style="font-family: Arial; padding: 20px;">
+  <h1>Test import PPTX → Canva</h1>
+
+  <p>1) Choisis un fichier PPTX</p>
+  <input id="file" type="file" accept=".pptx" />
+  <p>2) Titre Canva</p>
+  <input id="title" type="text" value="DISCIPLINE - Lukas GUILLAUD (Partie 1)" style="width: 420px;" />
+  <p>3) Clique</p>
+  <button id="btn">Importer dans Canva</button>
+
+  <pre id="out" style="margin-top:20px;background:#111;color:#0f0;padding:12px;white-space:pre-wrap;"></pre>
+
+  <script>
+    const OUT = document.getElementById("out");
+    const btn = document.getElementById("btn");
+
+    btn.onclick = async () => {
+      OUT.textContent = "Envoi en cours...\n";
+      const f = document.getElementById("file").files[0];
+      const title = document.getElementById("title").value.trim();
+      if (!f) return OUT.textContent = "❌ Choisis un fichier PPTX d'abord.";
+
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("title", title);
+
+      const r = await fetch("https://canva-agent-1.onrender.com/api/import", {
+        method: "POST",
+        body: fd,
+        credentials: "include"
+      });
+
+      const data = await r.json().catch(() => ({}));
+      OUT.textContent = JSON.stringify(data, null, 2);
+    };
+  </script>
+</body>
+</html>
