@@ -148,38 +148,57 @@ function titleBase64(title) {
 }
 
 // 1) IMPORT PPTX -> Canva (job)
-app.post("/api/import", upload.single("file"), async (req, res) => {
+app.post("/api/merge-pdf", async (req, res) => {
   try {
-    const token = getAccessToken(req);
-    if (!token) return res.status(401).json({ error: "Pas connecté à Canva" });
-    if (!req.file) return res.status(400).json({ error: "Fichier manquant" });
+    const { urls, filename = "DISCIPLINE.pdf" } = req.body || {};
+    if (!Array.isArray(urls) || urls.length < 2) {
+      return res.status(400).json({ error: "Il faut au moins 2 urls PDF" });
+    }
 
-    const title = req.body?.title || "DISCIPLINE - Lukas GUILLAUD";
-    const mimeType =
-      req.file.mimetype ||
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    console.log("MERGE START urls count =", urls.length);
 
-    const r = await fetch("https://api.canva.com/rest/v1/imports", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/octet-stream",
-        "Import-Metadata": JSON.stringify({
-          title_base64: titleBase64(title),
-          mime_type: mimeType,
-        }),
-      },
-      body: req.file.buffer,
-    });
+    const merged = await PDFDocument.create();
 
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json(data);
+    for (let i = 0; i < urls.length; i++) {
+      const u = urls[i];
+      console.log(`FETCH[${i}]`, u.slice(0, 120) + "…");
 
-    return res.json({ jobId: data?.job?.id, status: data?.job?.status });
+      const resp = await fetch(u, { redirect: "follow" });
+
+      console.log(`RESP[${i}] status=`, resp.status, resp.statusText);
+      const ct = resp.headers.get("content-type");
+      console.log(`RESP[${i}] content-type=`, ct);
+
+      if (!resp.ok) {
+        throw new Error(`Fetch failed [${i}] ${resp.status} ${resp.statusText}`);
+      }
+
+      const bytes = await resp.arrayBuffer();
+      console.log(`BYTES[${i}] length=`, bytes.byteLength);
+
+      try {
+        const doc = await PDFDocument.load(bytes);
+        const pages = await merged.copyPages(doc, doc.getPageIndices());
+        pages.forEach(p => merged.addPage(p));
+        console.log(`PDF[${i}] pages=`, doc.getPageCount());
+      } catch (e) {
+        // Très souvent: Canva URL expirée -> HTML, pas PDF
+        throw new Error(`Invalid PDF data at index ${i} (content-type=${ct}, bytes=${bytes.byteLength})`);
+      }
+    }
+
+    const out = await merged.save();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    console.log("MERGE SUCCESS total bytes =", out.length);
+    return res.send(Buffer.from(out));
   } catch (e) {
+    console.error("MERGE ERROR:", e);
     return res.status(500).json({ error: String(e?.message || e) });
   }
 });
+
 
 // 2) STATUS IMPORT (job -> designId + edit_url)
 app.get("/api/import/:jobId", async (req, res) => {
